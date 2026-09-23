@@ -36,7 +36,9 @@ set_firewall_rules() {
 	[ -n "$wss_port" ] && add_firewall_rule "easytier_wss" "tcp" "$wss_port" "EasyTier WSS"
 	[ -n "$wg_port" ] && add_firewall_rule "easytier_wg" "udp" "$wg_port" "EasyTier WG"
 	[ -n "$quic_port" ] && add_firewall_rule "easytier_quic" "tcp udp" "$quic_port" "EasyTier QUIC"
-	[ -n "$socks_port" ] && add_firewall_rule "easytier_socks5" "tcp" "$socks_port" "EasyTier SOCKS5"
+	# 不再自动放行 SOCKS5 端口到 WAN —— 无认证 SOCKS5 代理暴露给公网有严重安全风险
+	# 如需恢复自动放行，去掉下面一行行首的 # 即可
+	# [ -n "$socks_port" ] && add_firewall_rule "easytier_socks5" "tcp" "$socks_port" "EasyTier SOCKS5"
 }
 
 # 设置网络接口
@@ -187,8 +189,18 @@ setup_web_firewall() {
 	fi
 }
 
-# 应用防火墙和网络配置更改
+# 应用防火墙和网络配置更改（延迟后台执行）
 apply_network_changes() {
-	[ -n "$(uci changes network)" ] && uci commit network && /etc/init.d/network reload >/dev/null 2>&1
-	[ -n "$(uci changes firewall)" ] && uci commit firewall && /etc/init.d/firewall reload >/dev/null 2>&1
+	if [ -n "$(uci changes network)" ] || [ -n "$(uci changes firewall)" ]; then
+		(
+			sleep 5
+			LOCK_FILE="/var/lock/easytier_reload.lock"
+			if [ ! -f "$LOCK_FILE" ]; then
+				touch "$LOCK_FILE"
+				[ -n "$(uci changes network)" ] && uci commit network && /etc/init.d/network reload >/dev/null 2>&1
+				[ -n "$(uci changes firewall)" ] && uci commit firewall && /etc/init.d/firewall reload >/dev/null 2>&1
+				rm -f "$LOCK_FILE"
+			fi
+		) &
+	fi
 }
